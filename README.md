@@ -18,7 +18,7 @@ It provides a unified interface for concurrent task processing with configurable
 ## Installation
 
 ```bash
-go get [github.com/Maki-Daisuke/go-filiq](https://github.com/Maki-Daisuke/go-filiq)
+go get github.com/Maki-Daisuke/go-filiq
 
 ```
 
@@ -120,7 +120,7 @@ This method is thread-safe.
 
 #### `(r *Runner) TryPut(task func()) bool`
 
-Attempts to add a task to the task queue. This method does not block. If the buffer is full, this operation is ignored and returns `false`.
+Attempts to add a task to the task queue. This method does not block. If the buffer is full or the runner is stopped, this operation is ignored and returns `false`.
 This method is thread-safe.
 
 #### `(r *Runner) Stop()`
