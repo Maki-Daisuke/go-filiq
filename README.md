@@ -6,7 +6,7 @@
 
 > **FI**FO + **LI**FO + **Q**ueue = **filiq**
 
-filiq is a lightweight, type-safe, and dependency-free in-memory worker pool for Go.
+filiq is a lightweight and dependency-free in-memory worker pool for Go.
 It provides a unified interface for concurrent task processing with configurable **FIFO (Queue)** or **LIFO (Stack)** ordering.
 
 ## Features
