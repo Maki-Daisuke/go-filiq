@@ -31,8 +31,8 @@ type Runner struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup // Waits for workers to finish
-	stopped    bool
-	workerIdle int // Counter for idle workers (for optimization/monitoring if needed)
+	stopped      bool
+	panicHandler func(interface{})
 }
 
 // Option configures a Runner.
@@ -75,6 +75,14 @@ func WithBufferSize(size int) Option {
 func WithContext(ctx context.Context) Option {
 	return func(r *Runner) {
 		r.ctx = ctx
+	}
+}
+
+// WithPanicHandler sets a callback to be invoked when a task panics.
+// The worker will recover and continue processing subsequent tasks.
+func WithPanicHandler(handler func(interface{})) Option {
+	return func(r *Runner) {
+		r.panicHandler = handler
 	}
 }
 
@@ -161,7 +169,16 @@ func (r *Runner) workerLoop() {
 
 		// Execute task outside lock
 		if task != nil {
-			task()
+			func() {
+				defer func() {
+					if p := recover(); p != nil {
+						if r.panicHandler != nil {
+							r.panicHandler(p)
+						}
+					}
+				}()
+				task()
+			}()
 		}
 	}
 }
