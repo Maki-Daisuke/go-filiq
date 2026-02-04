@@ -186,6 +186,9 @@ func (r *Runner) Put(task func()) bool {
 			}
 			r.cond.Wait()
 		}
+		if r.stopped {
+			return false
+		}
 	}
 
 	r.compactIfNeeded()
