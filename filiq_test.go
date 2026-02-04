@@ -134,17 +134,22 @@ func TestBoundedBufferBlocks(t *testing.T) {
 	// Buffer size 1, Worker count 0 (simulated by having 1 worker blocked)
 	// Actually we can't set 0 workers, so we use 1 worker and block it.
 	r := filiq.New(filiq.WithBufferSize(1), filiq.WithWorkers(1))
+	defer r.Stop()
 
 	blockerWg := sync.WaitGroup{}
 	blockerWg.Add(1)
 
+	// User synchronization channel to know when worker has started
+	started := make(chan struct{})
+
 	// Task 1: Consumed immediately by worker, but blocks inside
 	r.Put(func() {
+		close(started)
 		blockerWg.Wait()
 	})
 
-	// Wait a bit for worker to pick it up
-	time.Sleep(50 * time.Millisecond)
+	// Wait for worker to pick it up - deterministic
+	<-started
 
 	// Now buffer is empty (worker took it).
 	// Task 2: Goes into buffer [1/1]
@@ -165,7 +170,7 @@ func TestBoundedBufferBlocks(t *testing.T) {
 	select {
 	case <-done3:
 		t.Fatal("Put should have blocked on full buffer")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(50 * time.Millisecond):
 		// Expected behavior: timeout because it's blocked
 	}
 
@@ -177,7 +182,6 @@ func TestBoundedBufferBlocks(t *testing.T) {
 	// Unblock everything
 	blockerWg.Done()
 	<-done3 // Should finish now
-	r.Stop()
 }
 
 func TestGracefulShutdownDiscards(t *testing.T) {
@@ -186,8 +190,10 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 	blockerWg := sync.WaitGroup{}
 	blockerWg.Add(1)
 
-	// Task 1: Block the worker
+	// Signal to ensure task 1 is running
 	started := make(chan struct{})
+
+	// Task 1: Block the worker
 	r.Put(func() {
 		close(started)
 		blockerWg.Wait()
@@ -202,24 +208,38 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 	})
 
 	// Stop() should signal exit.
-	// But first we need to unblock worker so it can finish Task 1.
-	// Wait, Stop() waits for workers. So if we hold the lock in Stop(), we can't unblock?
-	// No, Stop() calls cancel(), but here the worker is blocked on `blockerWg.Wait()`.
-	// We need to unblock the worker from the outside *after* Stop is called?
-	// Or unblock it before?
-
-	// If we call Stop(), it waits for wg.
-	// If the worker is stuck on blockerWg which is controlled by us, main goroutine is blocked on Stop().
-	// So we need to unblock in a separate goroutine.
-
+	// We run Stop() in a separate goroutine because it will block waiting for Task 1.
+	stopDone := make(chan struct{})
 	go func() {
-		time.Sleep(100 * time.Millisecond) // Ensure Stop() is entered
-		blockerWg.Done()
+		r.Stop()
+		close(stopDone)
 	}()
 
-	// This will block until Task 1 finishes.
-	// Task 2 should be discarded based on README ("Any tasks remaining... are discarded")
-	r.Stop()
+	// Wait until we see the runner is stopped.
+	// Since Stop() holds the lock while setting the stopped flag and clearing the queue,
+	// if TryPut returns false (due to stop), we know the queue is cleared.
+	timeout := time.After(time.Second)
+	isStopped := false
+	for !isStopped {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for Stop to take effect")
+		default:
+			// TryPut returns false if stopped is true
+			if !r.TryPut(func() {}) {
+				isStopped = true
+			} else {
+				// Still running, allow context switch
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}
+
+	// Unblock the worker. It should finish Task 1 and then see the stopped flag.
+	blockerWg.Done()
+
+	// Wait for Stop() to return
+	<-stopDone
 
 	if atomic.LoadInt64(&task2Ran) == 1 {
 		t.Error("Task 2 should have been discarded")
