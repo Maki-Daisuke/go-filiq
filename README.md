@@ -80,6 +80,20 @@ func main() {
 }
 ```
 
+### Bounded Buffer Usage
+
+You can limit the number of pending tasks to prevent memory issues. If the buffer is full, `Put()` will block until space is available.
+
+```go
+// Block Put() when 100 tasks are pending
+flq := filiq.New(filiq.WithWorkers(5), filiq.WithBufferSize(100))
+```
+
+> [!NOTE]
+> **Memory Usage Note:** While `WithBufferSize` strictly enforces the *logical* number of pending tasks, the *physical* memory allocated (slice capacity) may be up to ~2x the configured size. This is due to Go's slice growth strategy (doubling capacity on append) and `go-filiq`'s lazy compaction optimization.
+>
+> 💡 **Tip:** Setting `maxBuffer` to a **power of 2** (e.g., 1024, 4096) is recommended to align with Go's memory allocator and minimize unused capacity overhead.
+
 ## API Reference
 
 ### Functions
@@ -123,6 +137,21 @@ Why use `filiq` over standard channels?
 1. **LIFO Support:** Standard Go channels are strictly FIFO. Implementing LIFO usually requires complex mutex locking or inefficiency. `filiq` handles this natively.
 2. **Flexible Buffering:** Unlike standard channels which always block or panic, `filiq` supports both **unbounded** (auto-growing) and **bounded** (fixed-size) buffers. By default, it grows automatically, ensuring producers truly never block locally.
 3. **Condition Variables:** It uses `sync.Cond` for signaling. This avoids "busy loops" and ensures workers sleep efficiently when idle, waking up immediately when work arrives.
+
+### Benchmarks
+
+`filiq` is significantly faster than standard Go channels for worker pool patterns, thanks to reduced lock contention and `sync.Cond` efficiency.
+
+**Environment:** Windows (AMD Ryzen 9 7950X)
+
+| Implementation       | Type             | Time/Op        | Speedup   |
+|----------------------|------------------|----------------|-----------|
+| **Standard Channel** | FIFO (Buffered)  | ~98 ns/op      | 1.0x      |
+| **filiq**            | FIFO (Bounded)   | **~82 ns/op**  | **1.20x** |
+| **filiq**            | FIFO (Unbounded) | **~81 ns/op**  | **1.21x** |
+| **filiq**            | LIFO (Bounded)   | **~85 ns/op**  | **1.15x** |
+
+Measurements taken using `go test -bench . -benchmem`.
 
 ## License
 

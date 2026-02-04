@@ -1,3 +1,7 @@
+// Package filiq provides a lightweight, dependency-free, high-performance in-memory worker pool.
+// It supports both FIFO (Queue) and LIFO (Stack) processing modes with optional bounded buffering,
+// utilizing sync.Cond for efficient signaling and optimization strategies like head-index tracking
+// and lazy compaction to minimize memory allocations.
 package filiq
 
 import (
@@ -9,8 +13,10 @@ import (
 type Mode int
 
 const (
-	FIFO Mode = iota // First-In-First-Out (Queue)
-	LIFO             // Last-In-First-Out (Stack)
+	// FIFO (First-In-First-Out) processes tasks in the order they were added (Queue).
+	FIFO Mode = iota
+	// LIFO (Last-In-First-Out) processes the most recently added tasks first (Stack).
+	LIFO
 )
 
 // Runner manages a pool of workers to execute tasks.
@@ -18,6 +24,7 @@ type Runner struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
 	tasks      []func()
+	head       int // Head index for FIFO popping to avoid re-slicing
 	mode       Mode
 	workers    int
 	maxBuffer  int // 0 means unbounded
@@ -113,7 +120,7 @@ func (r *Runner) workerLoop() {
 
 		// Wait while there are no tasks AND the runner hasn't been stopped.
 		// If stopped is true, we still process remaining tasks until empty.
-		for len(r.tasks) == 0 {
+		for (len(r.tasks) - r.head) == 0 {
 			if r.stopped {
 				// No more tasks and stopped -> exit
 				r.mu.Unlock()
@@ -125,23 +132,24 @@ func (r *Runner) workerLoop() {
 
 		// Pop task based on mode
 		var task func()
-		lastIdx := len(r.tasks) - 1
 
-		if r.mode == LIFO {
-			// LIFO: Take from the end
+		if r.mode == FIFO {
+			// FIFO
+			task = r.tasks[r.head]
+			r.tasks[r.head] = nil // Avoid memory leak
+			r.head++
+		} else {
+			// LIFO
+			lastIdx := len(r.tasks) - 1
 			task = r.tasks[lastIdx]
 			r.tasks[lastIdx] = nil // Avoid memory leak
 			r.tasks = r.tasks[:lastIdx]
-		} else {
-			// FIFO: Take from the front
-			// Optimization: For a slice-based queue, taking from [0] involves shifting or slicing.
-			// r.tasks = r.tasks[1:] works but underlying array grows.
-			// A ring buffer would be better for massive queues, but for simplicity/robustness:
-			task = r.tasks[0]
-			r.tasks[0] = nil // Avoid memory leak
-			r.tasks = r.tasks[1:]
+		}
 
-			// Optional: compaction could happen here if capability > len*2 etc.
+		// Cleanup if empty to recover capacity instantly
+		if r.head == len(r.tasks) {
+			r.tasks = r.tasks[:0]
+			r.head = 0
 		}
 
 		// Signal to Put/TryPut that space might be available (if bounded)
@@ -171,7 +179,7 @@ func (r *Runner) Put(task func()) bool {
 
 	// If bounded, wait until there is space
 	if r.maxBuffer > 0 {
-		for len(r.tasks) >= r.maxBuffer {
+		for (len(r.tasks) - r.head) >= r.maxBuffer {
 			// Check stopped again while waiting
 			if r.stopped {
 				return false
@@ -180,6 +188,7 @@ func (r *Runner) Put(task func()) bool {
 		}
 	}
 
+	r.compactIfNeeded()
 	r.tasks = append(r.tasks, task)
 	r.cond.Signal() // Wake up one worker
 	return true
@@ -195,10 +204,11 @@ func (r *Runner) TryPut(task func()) bool {
 		return false
 	}
 
-	if r.maxBuffer > 0 && len(r.tasks) >= r.maxBuffer {
+	if r.maxBuffer > 0 && (len(r.tasks)-r.head) >= r.maxBuffer {
 		return false
 	}
 
+	r.compactIfNeeded()
 	r.tasks = append(r.tasks, task)
 	r.cond.Signal()
 	return true
@@ -215,20 +225,24 @@ func (r *Runner) Stop() {
 	r.stopped = true
 
 	r.tasks = nil // Discard queued tasks
+	r.head = 0    // Reset head
 
-	r.cond.Broadcast() // Wake up ALL workers so they check 'stopped'
-
-	// Also wake up any blocked producers
-	if r.maxBuffer > 0 {
-		// If producers are waiting on full buffer, they need to wake up and see stopped=true
-		// Broadcast handles them too if they share the cond?
-		// Yes, we actully share the cond for both workers and producers in this simple design.
-		// Wait, usually we use distinct condition variables or broadcast for everyone.
-		// Broadcast() wakes everyone.
-	}
+	r.cond.Broadcast() // Wake up ALL workers and producers so they check 'stopped'
 
 	r.mu.Unlock()
 
 	r.cancel()  // Cancel context
 	r.wg.Wait() // Wait for workers to return
+}
+
+// compactIfNeeded shifts elements to the front if the slice is full at the end
+// but has free space at the beginning.
+func (r *Runner) compactIfNeeded() {
+	if len(r.tasks) == cap(r.tasks) && r.head > 0 {
+		// Slice bounds are full, but we have space at the front.
+		// Compact the slice to reclaim space.
+		copy(r.tasks, r.tasks[r.head:])
+		r.tasks = r.tasks[:len(r.tasks)-r.head]
+		r.head = 0
+	}
 }
