@@ -5,7 +5,6 @@
 package filiq
 
 import (
-	"context"
 	"sync"
 )
 
@@ -21,16 +20,14 @@ const (
 
 // Runner manages a pool of workers to execute tasks.
 type Runner struct {
-	mu         sync.Mutex
-	cond       *sync.Cond
-	tasks      []func()
-	head       int // Head index for FIFO popping to avoid re-slicing
-	mode       Mode
-	workers    int
-	maxBuffer  int // 0 means unbounded
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup // Waits for workers to finish
+	mu           sync.Mutex
+	cond         *sync.Cond
+	tasks        []func()
+	head         int // Head index for FIFO popping to avoid re-slicing
+	mode         Mode
+	workers      int
+	maxBuffer    int            // 0 means unbounded
+	wg           sync.WaitGroup // Waits for workers to finish
 	stopped      bool
 	panicHandler func(interface{})
 }
@@ -71,13 +68,6 @@ func WithBufferSize(size int) Option {
 	}
 }
 
-// WithContext sets the parent context for the Runner.
-func WithContext(ctx context.Context) Option {
-	return func(r *Runner) {
-		r.ctx = ctx
-	}
-}
-
 // WithPanicHandler sets a callback to be invoked when a task panics.
 // The worker will recover and continue processing subsequent tasks.
 func WithPanicHandler(handler func(interface{})) Option {
@@ -92,22 +82,13 @@ func New(opts ...Option) *Runner {
 		mode:      FIFO,
 		workers:   1,
 		maxBuffer: 0, // Unbounded by default
-		ctx:       context.Background(),
 	}
 
 	for _, opt := range opts {
 		opt(r)
 	}
 
-	// Create a cancelable context for internal worker control, inheriting from user context
-	r.ctx, r.cancel = context.WithCancel(r.ctx)
 	r.cond = sync.NewCond(&r.mu)
-
-	// Monitor for cancellation to trigger graceful shutdown
-	go func() {
-		<-r.ctx.Done()
-		r.Stop()
-	}()
 
 	r.startWorkers()
 	return r
@@ -240,6 +221,7 @@ func (r *Runner) Stop() {
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
+		r.wg.Wait()
 		return
 	}
 	r.stopped = true
@@ -251,7 +233,6 @@ func (r *Runner) Stop() {
 
 	r.mu.Unlock()
 
-	r.cancel()  // Cancel context
 	r.wg.Wait() // Wait for workers to return
 }
 

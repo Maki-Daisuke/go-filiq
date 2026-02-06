@@ -2,7 +2,6 @@
 package filiq_test
 
 import (
-	"context"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -246,42 +245,4 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 	}
 }
 
-func TestContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	r := filiq.New(filiq.WithWorkers(1), filiq.WithContext(ctx))
 
-	// Ensure runner is working
-	executed := make(chan struct{})
-	r.Put(func() {
-		close(executed)
-	})
-	<-executed
-
-	// Cancel context
-	cancel()
-
-	// Wait for shutdown (Stop waits for workers, so if Stop is called, this should verify via side effect)
-	// How to verify Stop was called?
-	// We can try to Put something and expect it to fail if it's eventually stopped.
-	// But Put blocks if we don't have buffer space and workers are stopped?
-	// No, Put checks `if r.stopped { return false }`.
-
-	// Retry loop to wait for async stop propagation
-	timeout := time.After(1 * time.Second)
-	stopped := false
-	for {
-		select {
-		case <-timeout:
-			t.Fatal("Runner did not stop after context cancellation")
-		default:
-			if !r.Put(func() {}) {
-				stopped = true
-				break
-			}
-			time.Sleep(10 * time.Millisecond) // Give time for monitoring goroutine to react
-		}
-		if stopped {
-			break
-		}
-	}
-}

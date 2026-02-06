@@ -111,7 +111,6 @@ Creates a new `Runner` and starts worker goroutines.
 - `filiq.WithWorkers(n int)`: Sets the number of concurrent workers (default: 1).
 - `filiq.WithBufferSize(size int)`: Sets the buffer size limit (default: unlimited).
 - `filiq.WithPanicHandler(handler func(interface{}))`: Sets a callback to handle panics in tasks.
-- `filiq.WithContext(ctx context.Context)`: Sets the context (default: `context.Background()`).
 
 #### `(r *Runner) Put(task func()) bool`
 
