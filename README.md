@@ -32,6 +32,7 @@ Standard First-In-First-Out processing. Useful for job queues, log processing, o
 package main
 
 import (
+  "context"
   "fmt"
   "time"
 
@@ -44,7 +45,7 @@ func main() {
   // Create & start a new runner in FIFO mode (default)
   // You can pass options like filiq.WithWorkers(n)
   flq := filiq.New(filiq.WithWorkers(NUM_OF_WORKERS))
-  defer flq.Stop() // Graceful shutdown
+  defer flq.Shutdown(context.Background()) // Graceful shutdown
 
   // Add tasks
   for i := 1; i <= 5; i++ {
@@ -67,6 +68,7 @@ Last-In-First-Out processing. Useful when the **freshest data matters most**, or
 package main
 
 import (
+ "context"
  "fmt"
  "github.com/Maki-Daisuke/go-filiq"
 )
@@ -74,7 +76,7 @@ import (
 func main() {
   // LIFO mode with 4 workers
   flq := filiq.New(filiq.WithLIFO())
-  defer flq.Stop() // Graceful shutdown
+  defer flq.Shutdown(context.Background()) // Graceful shutdown
 
   // TODO
 }
@@ -122,12 +124,13 @@ This method is thread-safe.
 Attempts to add a task to the task queue. This method does not block. If the buffer is full or the runner is stopped, this operation is ignored and returns `false`.
 This method is thread-safe.
 
-#### `(r *Runner) Stop()`
+#### `(r *Runner) Shutdown(ctx context.Context) error`
 
 Stops the runner.
 
 - It signals all waiting workers to exit.
 - It waits for all active workers to finish their current job before returning (Graceful Shutdown).
+- It returns `nil` if shutdown completed successfully, or `ctx.Err()` if the context timed out or was canceled.
 - Any tasks remaining in the buffer are discarded.
 
 ## Performance

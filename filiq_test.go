@@ -2,6 +2,7 @@
 package filiq_test
 
 import (
+	"context"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -14,7 +15,7 @@ import (
 func TestFIFO(t *testing.T) {
 	// Single worker to guarantee order check
 	r := filiq.New(filiq.WithWorkers(1), filiq.WithFIFO())
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	var result []int
 	var mu sync.Mutex
@@ -50,7 +51,7 @@ func TestFIFO(t *testing.T) {
 func TestLIFO(t *testing.T) {
 	// Single worker to guarantee order check
 	r := filiq.New(filiq.WithWorkers(1), filiq.WithLIFO())
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	var result []int
 	var mu sync.Mutex
@@ -106,7 +107,7 @@ func TestLIFO(t *testing.T) {
 func TestConcurrency(t *testing.T) {
 	// Use multiple workers
 	r := filiq.New(filiq.WithWorkers(4))
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	var wg sync.WaitGroup
 	count := 100
@@ -133,7 +134,7 @@ func TestBoundedBufferBlocks(t *testing.T) {
 	// Buffer size 1, Worker count 0 (simulated by having 1 worker blocked)
 	// Actually we can't set 0 workers, so we use 1 worker and block it.
 	r := filiq.New(filiq.WithBufferSize(1), filiq.WithWorkers(1))
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	blockerWg := sync.WaitGroup{}
 	blockerWg.Add(1)
@@ -207,22 +208,21 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 	})
 
 	// Stop() should signal exit.
-	// We run Stop() in a separate goroutine because it will block waiting for Task 1.
-	stopDone := make(chan struct{})
+	// We run Shutdown() in a separate goroutine because it will block waiting for Task 1.
+	shutdownErr := make(chan error)
 	go func() {
-		r.Stop()
-		close(stopDone)
+		shutdownErr <- r.Shutdown(context.Background())
 	}()
 
 	// Wait until we see the runner is stopped.
-	// Since Stop() holds the lock while setting the stopped flag and clearing the queue,
+	// Since Shutdown() holds the lock while setting the stopped flag and clearing the queue,
 	// if TryPut returns false (due to stop), we know the queue is cleared.
 	timeout := time.After(time.Second)
 	isStopped := false
 	for !isStopped {
 		select {
 		case <-timeout:
-			t.Fatal("timed out waiting for Stop to take effect")
+			t.Fatal("timed out waiting for Shutdown to take effect")
 		default:
 			// TryPut returns false if stopped is true
 			if !r.TryPut(func() {}) {
@@ -237,12 +237,41 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 	// Unblock the worker. It should finish Task 1 and then see the stopped flag.
 	blockerWg.Done()
 
-	// Wait for Stop() to return
-	<-stopDone
+	// Wait for Shutdown() to return
+	if err := <-shutdownErr; err != nil {
+		t.Errorf("Shutdown returned error: %v", err)
+	}
 
 	if atomic.LoadInt64(&task2Ran) == 1 {
 		t.Error("Task 2 should have been discarded")
 	}
 }
 
+func TestShutdownTimeout(t *testing.T) {
+	r := filiq.New(filiq.WithWorkers(1))
 
+	// Start a long running task
+	started := make(chan struct{})
+	r.Put(func() {
+		close(started)
+		time.Sleep(500 * time.Millisecond)
+	})
+
+	<-started
+
+	// Try to shutdown with short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := r.Shutdown(ctx)
+	duration := time.Since(start)
+
+	if err != context.DeadlineExceeded {
+		t.Errorf("expected DeadlineExceeded, got %v", err)
+	}
+
+	if duration >= 400*time.Millisecond {
+		t.Errorf("Shutdown took too long: %v", duration)
+	}
+}

@@ -5,6 +5,7 @@
 package filiq
 
 import (
+	"context"
 	"sync"
 )
 
@@ -215,25 +216,33 @@ func (r *Runner) TryPut(task func()) bool {
 	return true
 }
 
-// Stop signals all workers to stop and waits for them to finish current tasks.
+// Shutdown signals all workers to stop and waits for them to finish current tasks.
+// It respects the provided context for timeout or cancellation.
 // Tasks remaining in the queue will be discarded.
-func (r *Runner) Stop() {
+func (r *Runner) Shutdown(ctx context.Context) error {
 	r.mu.Lock()
-	if r.stopped {
-		r.mu.Unlock()
-		r.wg.Wait()
-		return
+	if !r.stopped {
+		r.stopped = true
+
+		r.tasks = nil // Discard queued tasks
+		r.head = 0    // Reset head
+
+		r.cond.Broadcast() // Wake up ALL workers and producers so they check 'stopped'
 	}
-	r.stopped = true
-
-	r.tasks = nil // Discard queued tasks
-	r.head = 0    // Reset head
-
-	r.cond.Broadcast() // Wake up ALL workers and producers so they check 'stopped'
-
 	r.mu.Unlock()
 
-	r.wg.Wait() // Wait for workers to return
+	// Wait for workers to return, or context to be done
+	c := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(c)
+	}()
+	select {
+	case <-c:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // compactIfNeeded shifts elements to the front if the slice is full at the end

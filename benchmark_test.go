@@ -1,6 +1,7 @@
 package filiq_test
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -39,7 +40,7 @@ func BenchmarkFiliqBounded(b *testing.B) {
 	workers := 4
 	// Use same buffer size as standard channel
 	r := filiq.New(filiq.WithWorkers(workers), filiq.WithBufferSize(64))
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	var wg sync.WaitGroup
 	b.ResetTimer()
@@ -58,7 +59,7 @@ func BenchmarkFiliqUnbounded(b *testing.B) {
 	workers := 4
 	// Default is unbounded
 	r := filiq.New(filiq.WithWorkers(workers))
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	var wg sync.WaitGroup
 	b.ResetTimer()
@@ -76,7 +77,7 @@ func BenchmarkFiliqUnbounded(b *testing.B) {
 func BenchmarkFiliqLIFOUnbounded(b *testing.B) {
 	workers := 4
 	r := filiq.New(filiq.WithWorkers(workers), filiq.WithLIFO())
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	var wg sync.WaitGroup
 	b.ResetTimer()
@@ -94,7 +95,7 @@ func BenchmarkFiliqLIFOUnbounded(b *testing.B) {
 func BenchmarkFiliqLIFOBounded(b *testing.B) {
 	workers := 4
 	r := filiq.New(filiq.WithWorkers(workers), filiq.WithLIFO(), filiq.WithBufferSize(64))
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	var wg sync.WaitGroup
 	b.ResetTimer()

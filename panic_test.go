@@ -1,6 +1,7 @@
 package filiq_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -13,7 +14,7 @@ func TestPanicRecovery(t *testing.T) {
 	r := filiq.New(filiq.WithWorkers(1), filiq.WithPanicHandler(func(p interface{}) {
 		capturedPanic = p
 	}))
-	defer r.Stop()
+	defer r.Shutdown(context.Background())
 
 	// Task that panics
 	r.Put(func() {
