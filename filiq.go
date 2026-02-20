@@ -142,11 +142,6 @@ func (r *Runner) workerLoop() {
 			r.head = 0
 		}
 
-		// Signal to Put/TryPut that space might be available (if bounded)
-		if r.maxBuffer > 0 {
-			r.cond.Signal() // We consumed one, so wake up a producer if they are waiting
-		}
-
 		r.mu.Unlock()
 
 		// Execute task outside lock
@@ -165,55 +160,25 @@ func (r *Runner) workerLoop() {
 	}
 }
 
-// Put adds a task to the pool.
-// If the buffer is full (bounded mode), it blocks until space is available.
-// Returns false if the runner is stopped.
-func (r *Runner) Put(task func()) bool {
+// Submit adds a task to the pool.
+// It is non-blocking. If the queue is full (in bounded mode), it returns ErrQueueFull.
+// If the runner is stopped, it returns ErrQueueClosed.
+func (r *Runner) Submit(task func()) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.stopped {
-		return false
-	}
-
-	// If bounded, wait until there is space
-	if r.maxBuffer > 0 {
-		for (len(r.tasks) - r.head) >= r.maxBuffer {
-			// Check stopped again while waiting
-			if r.stopped {
-				return false
-			}
-			r.cond.Wait()
-		}
-		if r.stopped {
-			return false
-		}
-	}
-
-	r.compactIfNeeded()
-	r.tasks = append(r.tasks, task)
-	r.cond.Signal() // Wake up one worker
-	return true
-}
-
-// TryPut attempts to add a task to the pool without blocking.
-// Returns false if the buffer is full or the runner is stopped.
-func (r *Runner) TryPut(task func()) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.stopped {
-		return false
+		return ErrQueueClosed
 	}
 
 	if r.maxBuffer > 0 && (len(r.tasks)-r.head) >= r.maxBuffer {
-		return false
+		return ErrQueueFull
 	}
 
 	r.compactIfNeeded()
 	r.tasks = append(r.tasks, task)
 	r.cond.Signal()
-	return true
+	return nil
 }
 
 // Shutdown signals all workers to stop and waits for them to finish current tasks.
@@ -227,7 +192,7 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 		r.tasks = nil // Discard queued tasks
 		r.head = 0    // Reset head
 
-		r.cond.Broadcast() // Wake up ALL workers and producers so they check 'stopped'
+		r.cond.Broadcast() // Wake up ALL workers so they check 'stopped'
 	}
 	r.mu.Unlock()
 

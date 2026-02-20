@@ -49,9 +49,12 @@ func main() {
 
   // Add tasks
   for i := 1; i <= 5; i++ {
-    flq.Put(func(){
+    err := flq.Submit(func(){
       // TODO
     })
+    if err != nil {
+      fmt.Println("Queue error:", err)
+    }
   }
 
   // Wait for tasks to drain (simple sleep for demo)
@@ -84,10 +87,10 @@ func main() {
 
 ### Bounded Buffer Usage
 
-You can limit the number of pending tasks to prevent memory issues. If the buffer is full, `Put()` will block until space is available.
+You can limit the number of pending tasks to prevent memory issues. If the buffer is full, `Submit()` will return `ErrQueueFull`.
 
 ```go
-// Block Put() when 100 tasks are pending
+// Return error when 100 tasks are pending
 flq := filiq.New(filiq.WithWorkers(5), filiq.WithBufferSize(100))
 ```
 
@@ -114,14 +117,14 @@ Creates a new `Runner` and starts worker goroutines.
 - `filiq.WithBufferSize(size int)`: Sets the buffer size limit (default: unlimited).
 - `filiq.WithPanicHandler(handler func(interface{}))`: Sets a callback to handle panics in tasks.
 
-#### `(r *Runner) Put(task func()) bool`
+#### `(r *Runner) Submit(task func()) error`
 
-Adds a task to the task queue. This method blocks if the buffer is full. If the runner is stopped, this operation is ignored and returns `false`.
-This method is thread-safe.
+Adds a task to the task queue. This method **does not block**.
 
-#### `(r *Runner) TryPut(task func()) bool`
+- If the buffer is full (in bounded mode), it returns `ErrQueueFull`.
+- If the runner is stopped, it returns `ErrQueueClosed`.
+- Otherwise, it returns `nil`.
 
-Attempts to add a task to the task queue. This method does not block. If the buffer is full or the runner is stopped, this operation is ignored and returns `false`.
 This method is thread-safe.
 
 #### `(r *Runner) Shutdown(ctx context.Context) error`
@@ -138,8 +141,9 @@ Stops the runner.
 Why use `filiq` over standard channels?
 
 1. **LIFO Support:** Standard Go channels are strictly FIFO. Implementing LIFO usually requires complex mutex locking or inefficiency. `filiq` handles this natively.
-2. **Flexible Buffering:** Unlike standard channels which always block or panic, `filiq` supports both **unbounded** (auto-growing) and **bounded** (fixed-size) buffers. By default, it grows automatically, ensuring producers truly never block locally.
-3. **Condition Variables:** It uses `sync.Cond` for signaling. This avoids "busy loops" and ensures workers sleep efficiently when idle, waking up immediately when work arrives.
+2. **Non-blocking by Default:** `Submit` never blocks the caller, allowing for responsive applications that can handle backpressure gracefully.
+3. **Flexible Buffering:** Unlike standard channels, `filiq` supports both **unbounded** (auto-growing) and **bounded** (fixed-size) buffers. By default, it grows automatically.
+4. **Condition Variables:** It uses `sync.Cond` for signaling. This avoids "busy loops" and ensures workers sleep efficiently when idle, waking up immediately when work arrives.
 
 ### Benchmarks
 

@@ -26,7 +26,7 @@ func TestFIFO(t *testing.T) {
 
 	for i := 0; i < count; i++ {
 		val := i
-		r.Put(func() {
+		r.Submit(func() {
 			defer wg.Done()
 			// Simulate small work
 			time.Sleep(10 * time.Millisecond)
@@ -60,7 +60,7 @@ func TestLIFO(t *testing.T) {
 	count := 10
 	// For LIFO test, we need to make sure tasks are queued BEFORE the worker picks them up.
 	// Otherwise, if the worker is too fast, it acts like FIFO (processes as soon as it arrives).
-	// But `r.Put` signals immediately.
+	// But `r.Submit` signals immediately.
 	// To test LIFO, we can pause the worker?
 	// Or we can fill the queue before starting?
 	// The current API starts workers immediately in `New`.
@@ -73,14 +73,14 @@ func TestLIFO(t *testing.T) {
 	// Add a blocker task first
 	blockerWg := sync.WaitGroup{}
 	blockerWg.Add(1)
-	r.Put(func() {
+	r.Submit(func() {
 		blockerWg.Wait() // Block the single worker
 	})
 
 	// Now queue up items 0..9
 	for i := 0; i < count; i++ {
 		val := i
-		r.Put(func() {
+		r.Submit(func() {
 			defer wg.Done()
 			mu.Lock()
 			result = append(result, val)
@@ -116,7 +116,7 @@ func TestConcurrency(t *testing.T) {
 	var counter int64
 
 	for i := 0; i < count; i++ {
-		r.Put(func() {
+		r.Submit(func() {
 			defer wg.Done()
 			atomic.AddInt64(&counter, 1)
 			time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
@@ -130,7 +130,7 @@ func TestConcurrency(t *testing.T) {
 	}
 }
 
-func TestBoundedBufferBlocks(t *testing.T) {
+func TestBoundedBufferReturnsError(t *testing.T) {
 	// Buffer size 1, Worker count 0 (simulated by having 1 worker blocked)
 	// Actually we can't set 0 workers, so we use 1 worker and block it.
 	r := filiq.New(filiq.WithBufferSize(1), filiq.WithWorkers(1))
@@ -143,7 +143,7 @@ func TestBoundedBufferBlocks(t *testing.T) {
 	started := make(chan struct{})
 
 	// Task 1: Consumed immediately by worker, but blocks inside
-	r.Put(func() {
+	r.Submit(func() {
 		close(started)
 		blockerWg.Wait()
 	})
@@ -153,35 +153,18 @@ func TestBoundedBufferBlocks(t *testing.T) {
 
 	// Now buffer is empty (worker took it).
 	// Task 2: Goes into buffer [1/1]
-	done2 := make(chan struct{})
-	go func() {
-		r.Put(func() {})
-		close(done2)
-	}()
-	<-done2 // Should return quickly
-
-	// Task 3: Should block because buffer is full (Test 2 is in buffer)
-	done3 := make(chan struct{})
-	go func() {
-		r.Put(func() {})
-		close(done3)
-	}()
-
-	select {
-	case <-done3:
-		t.Fatal("Put should have blocked on full buffer")
-	case <-time.After(50 * time.Millisecond):
-		// Expected behavior: timeout because it's blocked
+	if err := r.Submit(func() {}); err != nil {
+		t.Errorf("Expected nil error for Task 2, got %v", err)
 	}
 
-	// TryPut should return false immediately
-	if r.TryPut(func() {}) {
-		t.Error("TryPut should return false when buffer is full")
+	// Task 3: Should return ErrQueueFull because buffer is full (Test 2 is in buffer)
+	err := r.Submit(func() {})
+	if err != filiq.ErrQueueFull {
+		t.Errorf("Expected ErrQueueFull, got %v", err)
 	}
 
 	// Unblock everything
 	blockerWg.Done()
-	<-done3 // Should finish now
 }
 
 func TestGracefulShutdownDiscards(t *testing.T) {
@@ -194,7 +177,7 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 	started := make(chan struct{})
 
 	// Task 1: Block the worker
-	r.Put(func() {
+	r.Submit(func() {
 		close(started)
 		blockerWg.Wait()
 	})
@@ -203,7 +186,7 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 
 	// Task 2: In queue
 	var task2Ran int64
-	r.Put(func() {
+	r.Submit(func() {
 		atomic.StoreInt64(&task2Ran, 1)
 	})
 
@@ -216,7 +199,7 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 
 	// Wait until we see the runner is stopped.
 	// Since Shutdown() holds the lock while setting the stopped flag and clearing the queue,
-	// if TryPut returns false (due to stop), we know the queue is cleared.
+	// if Submit returns ErrQueueClosed, we know the queue is cleared.
 	timeout := time.After(time.Second)
 	isStopped := false
 	for !isStopped {
@@ -224,8 +207,7 @@ func TestGracefulShutdownDiscards(t *testing.T) {
 		case <-timeout:
 			t.Fatal("timed out waiting for Shutdown to take effect")
 		default:
-			// TryPut returns false if stopped is true
-			if !r.TryPut(func() {}) {
+			if r.Submit(func() {}) == filiq.ErrQueueClosed {
 				isStopped = true
 			} else {
 				// Still running, allow context switch
@@ -252,7 +234,7 @@ func TestShutdownTimeout(t *testing.T) {
 
 	// Start a long running task
 	started := make(chan struct{})
-	r.Put(func() {
+	r.Submit(func() {
 		close(started)
 		time.Sleep(500 * time.Millisecond)
 	})

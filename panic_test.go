@@ -17,7 +17,7 @@ func TestPanicRecovery(t *testing.T) {
 	defer r.Shutdown(context.Background())
 
 	// Task that panics
-	r.Put(func() {
+	r.Submit(func() {
 		panic("oops")
 	})
 
@@ -33,11 +33,11 @@ func TestPanicRecovery(t *testing.T) {
 
 	// Put normal task
 	done := make(chan struct{})
-	sent := r.Put(func() {
+	err := r.Submit(func() {
 		close(done)
 	})
-	if !sent {
-		t.Fatal("Failed to put task")
+	if err != nil {
+		t.Fatalf("Failed to put task: %v", err)
 	}
 
 	select {

@@ -2,6 +2,7 @@ package filiq_test
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -47,9 +48,15 @@ func BenchmarkFiliqBounded(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		wg.Add(1)
-		r.Put(func() {
-			wg.Done()
-		})
+		for {
+			err := r.Submit(func() {
+				wg.Done()
+			})
+			if err == nil {
+				break
+			}
+			runtime.Gosched()
+		}
 	}
 	wg.Wait()
 }
@@ -66,7 +73,7 @@ func BenchmarkFiliqUnbounded(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		wg.Add(1)
-		r.Put(func() {
+		r.Submit(func() {
 			wg.Done()
 		})
 	}
@@ -84,7 +91,7 @@ func BenchmarkFiliqLIFOUnbounded(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		wg.Add(1)
-		r.Put(func() {
+		r.Submit(func() {
 			wg.Done()
 		})
 	}
@@ -102,9 +109,15 @@ func BenchmarkFiliqLIFOBounded(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		wg.Add(1)
-		r.Put(func() {
-			wg.Done()
-		})
+		for {
+			err := r.Submit(func() {
+				wg.Done()
+			})
+			if err == nil {
+				break
+			}
+			runtime.Gosched()
+		}
 	}
 	wg.Wait()
 }
